@@ -1,0 +1,200 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract CarOwnershipRegistry is Ownable {
+    // Struct for Car
+    struct Car {
+        uint256 id;
+        string make; // e.g., "Toyota"
+        string model; // e.g., "Camry"
+        string vin; // Vehicle Identification Number
+        string dataHash; // IPFS hash for detailed data (e.g., maintenance, images)
+        address currentOwner; // Current owner of the car
+        uint256 timestamp; // Unix timestamp of registration or last update
+        bool isActive; // Status of the car record
+    }
+
+    // Struct for Transaction (ownership transfer)
+    struct Transaction {
+        uint256 id;
+        uint256 carId;
+        address from; // Previous owner
+        address to; // New owner
+        uint256 timestamp; // Unix timestamp
+        string description; // Optional note (e.g., "Sale")
+    }
+
+    // Counters
+    uint256 private nextCarId = 1;
+    uint256 private nextTransactionId = 1;
+
+    // Mappings
+    mapping(uint256 => Car) public cars; // Car ID to car details
+    mapping(address => uint256[]) public ownerCars; // Owner address to list of car IDs
+    mapping(uint256 => Transaction[]) public carTransactionHistory; // Car ID to ownership transfer history
+    mapping(address => bool) public authorizedRegistrars; // Authorized entities (e.g., dealers, DMV)
+
+    // Events
+    event RegistrarAuthorized(address indexed registrar);
+    event RegistrarRevoked(address indexed registrar);
+    event CarRegistered(
+        uint256 indexed carId,
+        string make,
+        string model,
+        string vin,
+        string dataHash,
+        address owner
+    );
+    event OwnershipTransferred(
+        uint256 indexed carId,
+        address indexed from,
+        address indexed to,
+        string description
+    );
+    event CarDeactivated(uint256 indexed carId);
+
+    constructor() Ownable(msg.sender) {}
+
+    // Modifier to restrict access to authorized registrars
+    modifier onlyAuthorizedRegistrar() {
+        require(authorizedRegistrars[msg.sender] || owner() == msg.sender, "Not authorized registrar");
+        _;
+    }
+
+    // Authorize a registrar (e.g., car dealer, DMV)
+    function authorizeRegistrar(address registrar) external onlyOwner {
+        require(registrar != address(0), "Invalid address");
+        require(!authorizedRegistrars[registrar], "Registrar already authorized");
+        authorizedRegistrars[registrar] = true;
+        emit RegistrarAuthorized(registrar);
+    }
+
+    // Revoke a registrar's authorization
+    function revokeRegistrar(address registrar) external onlyOwner {
+        require(authorizedRegistrars[registrar], "Registrar not authorized");
+        authorizedRegistrars[registrar] = false;
+        emit RegistrarRevoked(registrar);
+    }
+
+    // Register a new car
+    function registerCar(
+        string memory make,
+        string memory model,
+        string memory vin,
+        string memory dataHash,
+        address owner
+    ) external onlyAuthorizedRegistrar returns (uint256) {
+        require(bytes(make).length > 0, "Make cannot be empty");
+        require(bytes(model).length > 0, "Model cannot be empty");
+        require(bytes(vin).length > 0, "VIN cannot be empty");
+        require(owner != address(0), "Invalid owner address");
+
+        uint256 carId = nextCarId++;
+        cars[carId] = Car(
+            carId,
+            make,
+            model,
+            vin,
+            dataHash,
+            owner,
+            block.timestamp,
+            true
+        );
+        ownerCars[owner].push(carId);
+
+        emit CarRegistered(carId, make, model, vin, dataHash, owner);
+        return carId;
+    }
+
+    // Transfer car ownership
+    function transferOwnership(
+        uint256 carId,
+        address newOwner,
+        string memory description
+    ) external {
+        require(cars[carId].isActive, "Car not active");
+        require(cars[carId].currentOwner == msg.sender, "Not the current owner");
+        require(newOwner != address(0), "Invalid new owner address");
+
+        address oldOwner = cars[carId].currentOwner;
+        cars[carId].currentOwner = newOwner;
+        cars[carId].timestamp = block.timestamp;
+
+        // Update ownerCars mapping
+        ownerCars[newOwner].push(carId);
+        for (uint256 i = 0; i < ownerCars[oldOwner].length; i++) {
+            if (ownerCars[oldOwner][i] == carId) {
+                ownerCars[oldOwner][i] = ownerCars[oldOwner][ownerCars[oldOwner].length - 1];
+                ownerCars[oldOwner].pop();
+                break;
+            }
+        }
+
+        // Record transaction
+        Transaction memory txData = Transaction(
+            nextTransactionId++,
+            carId,
+            oldOwner,
+            newOwner,
+            block.timestamp,
+            description
+        );
+        carTransactionHistory[carId].push(txData);
+
+        emit OwnershipTransferred(carId, oldOwner, newOwner, description);
+    }
+
+    // Deactivate a car record (e.g., car scrapped)
+    function deactivateCar(uint256 carId) external {
+        require(cars[carId].isActive, "Car not active");
+        require(
+            cars[carId].currentOwner == msg.sender || authorizedRegistrars[msg.sender] || owner() == msg.sender,
+            "Not authorized"
+        );
+        cars[carId].isActive = false;
+        emit CarDeactivated(carId);
+    }
+
+    // Get car details
+    function getCar(uint256 carId)
+        external
+        view
+        returns (
+            string memory make,
+            string memory model,
+            string memory vin,
+            string memory dataHash,
+            address currentOwner,
+            uint256 timestamp,
+            bool isActive
+        )
+    {
+        require(cars[carId].id != 0, "Car does not exist");
+        Car memory car = cars[carId];
+        return (
+            car.make,
+            car.model,
+            car.vin,
+            car.dataHash,
+            car.currentOwner,
+            car.timestamp,
+            car.isActive
+        );
+    }
+
+    // Get cars owned by an address
+    function getOwnerCars(address owner) external view returns (uint256[] memory) {
+        return ownerCars[owner];
+    }
+
+    // Get transaction history for a car
+    function getCarTransactionHistory(uint256 carId)
+        external
+        view
+        returns (Transaction[] memory)
+    {
+        return carTransactionHistory[carId];
+    }
+}
