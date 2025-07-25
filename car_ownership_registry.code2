@@ -1,0 +1,18 @@
+from cryptography.fernet import Fernet
+
+# Generate and save a key (do this once and store securely)
+key = Fernet.generate_key()
+cipher = Fernet(key)
+
+# Encrypt owner name before saving
+encrypted_owner = cipher.encrypt(owner_name.encode()).decode()
+# Decrypt when retrieving
+decrypted_owner = cipher.decrypt(encrypted_owner.encode()).decode()
+
+day 4
+
+def search_registry(self, search_term):
+    cursor = self.conn.cursor()
+    cursor.execute("SELECT * FROM cars WHERE owner_name LIKE ? OR make LIKE ?", 
+                   (f"%{search_term}%", f"%{search_term}%"))
+    return cursor.fetchall()
